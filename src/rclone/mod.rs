@@ -21,6 +21,7 @@ pub struct FileItem {
 }
 
 /// Rclone client for interacting with rclone CLI
+#[derive(Debug)]
 pub struct RcloneClient {
     rclone_path: String,
 }

@@ -171,11 +171,8 @@ impl App {
                                 let file = self.files[index].clone();
                                 if file.is_dir {
                                     // Navigate into directory
-                                    self.current_path = if self.current_path.is_empty() {
-                                        file.path.clone()
-                                    } else {
-                                        format!("{}/{}", self.current_path, file.path)
-                                    };
+                                    // file.path is the relative path from root, not from current directory
+                                    self.current_path = file.path.clone();
                                     if let Some(remote) = self.current_remote.clone() {
                                         let path = self.current_path.clone();
                                         self.refresh_files(&remote, &path).await?;
@@ -310,31 +307,17 @@ impl App {
 
         // Title
         let title_text = match self.view {
-            ViewMode::Remotes => "☁️  Rclone UI - Remotes",
+            ViewMode::Remotes => "☁️  Rclone UI - Remotes".to_string(),
             ViewMode::Files => {
                 if let Some(ref remote) = self.current_remote {
                     if self.current_path.is_empty() {
-                        return f.render_widget(
-                            Paragraph::new(format!("☁️  Rclone UI - {}", remote))
-                                .style(Style::default().fg(Color::Cyan))
-                                .alignment(Alignment::Center)
-                                .block(Block::default().borders(Borders::ALL)),
-                            chunks[0],
-                        );
+                        format!("☁️  Rclone UI - {}", remote)
                     } else {
-                        return f.render_widget(
-                            Paragraph::new(format!(
-                                "☁️  Rclone UI - {}:{}",
-                                remote, self.current_path
-                            ))
-                            .style(Style::default().fg(Color::Cyan))
-                            .alignment(Alignment::Center)
-                            .block(Block::default().borders(Borders::ALL)),
-                            chunks[0],
-                        );
+                        format!("☁️  Rclone UI - {}:{}", remote, self.current_path)
                     }
+                } else {
+                    "☁️  Rclone UI - Files".to_string()
                 }
-                "☁️  Rclone UI - Files"
             }
         };
 

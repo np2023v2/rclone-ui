@@ -1,28 +1,19 @@
-//! Template Rust - Todo App Example
+//! Rclone UI - A TUI for rclone cloud file management
 //!
-//! This is a template Rust project featuring a todo application with SQLite database
-//! and terminal user interface (TUI).
+//! This application provides a terminal user interface (TUI) for managing
+//! cloud files using rclone.
 
-pub mod database;
-pub mod models;
+pub mod rclone;
 pub mod tui;
 
-pub use models::*;
+pub use rclone::*;
 
 /// Application result type
 pub type Result<T> = anyhow::Result<T>;
 
 /// Application configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Config {
-    /// Database file path
-    pub database_url: String,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            database_url: "todo.db".to_string(),
-        }
-    }
+    /// Rclone configuration path (optional)
+    pub rclone_config: Option<String>,
 }

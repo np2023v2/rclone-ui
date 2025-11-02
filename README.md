@@ -1,10 +1,10 @@
-# Template Rust
+# Rclone UI
 
-A Rust project template featuring a todo application with SQLite database and terminal user interface (TUI).
+A Terminal User Interface (TUI) for [rclone](https://rclone.org/) - manage your cloud storage with ease from the terminal.
 
 ## Features
 
-- 📝 Todo management with SQLite persistence
+- 🌥️ Browse and manage cloud storage remotes
 - 🖥️ Interactive Terminal User Interface (TUI)
 - 🔧 Command Line Interface (CLI)
 - 🧪 Comprehensive test suite
@@ -15,6 +15,21 @@ A Rust project template featuring a todo application with SQLite database and te
 - ❄️ Nix flakes for reproducible environments
 - 📦 Devcontainer configuration for GitHub Codespaces
 
+## Prerequisites
+
+**Rclone must be installed and configured on your system.**
+
+Install rclone:
+- **macOS**: `brew install rclone`
+- **Linux**: `curl https://rclone.org/install.sh | sudo bash`
+- **Windows**: Download from [rclone.org/downloads](https://rclone.org/downloads/)
+- **Nix**: Included in the development environment
+
+Configure remotes:
+```bash
+rclone config
+```
+
 ## Installation
 
 > **💡 Quick Start**: See [SETUP.md](SETUP.md) for detailed setup instructions using Docker, Nix, Codespaces, or local development.
@@ -22,23 +37,23 @@ A Rust project template featuring a todo application with SQLite database and te
 ### From Source
 
 ```bash
-git clone https://github.com/pnstack/template-rust.git
-cd template-rust
+git clone https://github.com/np2023v2/rclone-ui.git
+cd rclone-ui
 cargo build --release
 ```
 
 ### From Releases
 
-Download the latest binary from the [Releases](https://github.com/pnstack/template-rust/releases) page.
+Download the latest binary from the [Releases](https://github.com/np2023v2/rclone-ui/releases) page.
 
 ### With Docker
 
 ```bash
 # Build the image
-docker build -t template-rust:latest .
+docker build -t rclone-ui:latest .
 
-# Run with interactive TUI
-docker run --rm -it -v $(pwd)/data:/app/data template-rust:latest tui
+# Run with interactive TUI (mount rclone config)
+docker run --rm -it -v ~/.config/rclone:/root/.config/rclone rclone-ui:latest
 
 # Or use Docker Compose
 docker compose up
@@ -47,7 +62,7 @@ docker compose up
 ### With Nix
 
 ```bash
-# Enter development environment
+# Enter development environment (includes rclone)
 nix develop
 
 # Or run directly
@@ -60,61 +75,50 @@ Click the "Code" button on GitHub and select "Create codespace on main" - everyt
 
 ## Usage
 
-### Command Line Interface
-
-```bash
-# Show help
-./template-rust --help
-
-# Add a new todo
-./template-rust add "Buy groceries" --description "Milk, eggs, bread"
-
-# List all todos
-./template-rust list
-
-# List only completed todos
-./template-rust list --completed
-
-# List only pending todos
-./template-rust list --pending
-
-# Complete a todo (use the ID from list command)
-./template-rust complete <todo-id>
-
-# Delete a todo
-./template-rust delete <todo-id>
-
-# Start interactive TUI (default mode)
-./template-rust tui
-```
-
 ### Terminal User Interface (TUI)
 
-Start the interactive mode:
+Start the interactive mode (default):
 
 ```bash
-./template-rust tui
+./rclone-ui
+# or
+./rclone-ui tui
 ```
 
 #### TUI Commands:
 - `h` - Show help
-- `n` - Add new todo
-- `d` - Delete selected todo
-- `c` - Toggle todo completion status
-- `a` - Show all todos
-- `p` - Show pending todos only
-- `f` - Show completed todos only
-- `↑↓` - Navigate todos
+- `Enter` - Open selected remote or navigate into directory
+- `b` - Go back (to parent directory or remotes list)
+- `r` - Refresh current view
+- `↑↓` - Navigate items
 - `q` - Quit application
+
+### Command Line Interface
+
+```bash
+# Show help
+./rclone-ui --help
+
+# List all configured remotes
+./rclone-ui remotes
+
+# List files in a remote
+./rclone-ui list myremote:
+
+# List files in a specific path
+./rclone-ui list myremote:Documents
+
+# Check rclone version
+./rclone-ui version
+```
 
 ## Project Structure
 
 ```
-template-rust/
+rclone-ui/
 ├── .github/workflows/    # CI/CD workflows
 ├── src/
-│   ├── database/         # Database layer
-│   ├── models/           # Data models
+│   ├── rclone/           # Rclone CLI interaction
 │   ├── tui/              # Terminal UI
 │   ├── lib.rs            # Library root
 │   └── main.rs           # CLI application
@@ -131,9 +135,9 @@ template-rust/
 
 Choose your preferred development method:
 
-- **Local**: Rust 1.70 or later, SQLite3
+- **Local**: Rust 1.70 or later, rclone
 - **Docker**: Docker 20.10+ and Docker Compose
-- **Nix**: Nix package manager with flakes enabled
+- **Nix**: Nix package manager with flakes enabled (includes rclone)
 - **Codespaces**: Just a GitHub account!
 
 ### Building
@@ -172,23 +176,27 @@ cargo fmt
 The project provides multiple development environment options:
 
 - **Docker Compose**: `docker compose up dev` - Containerized development with live code mounting
-- **Nix Flakes**: `nix develop` - Reproducible environment with all dependencies
+- **Nix Flakes**: `nix develop` - Reproducible environment with all dependencies including rclone
 - **Devcontainer**: Open in VS Code or GitHub Codespaces - Fully configured IDE
 - **Traditional**: Local Rust installation with cargo
 
-## Database
+## Rclone Configuration
 
-The application uses SQLite for persistence. By default, it creates a `todo.db` file in the current directory. You can specify a different database path:
-
-```bash
-./template-rust --database /path/to/your/todos.db list
-```
-
-For testing with in-memory database:
+The application uses your system's rclone configuration. Configure remotes using:
 
 ```bash
-./template-rust --database ":memory:" add "Test todo"
+rclone config
 ```
+
+Supported remote types include:
+- Amazon S3
+- Google Drive
+- Dropbox
+- Microsoft OneDrive
+- Backblaze B2
+- And many more...
+
+See [rclone.org](https://rclone.org/) for full documentation.
 
 ## CI/CD
 

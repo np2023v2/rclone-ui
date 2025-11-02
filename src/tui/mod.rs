@@ -1,5 +1,4 @@
-use crate::database::TodoDatabase;
-use crate::models::Todo;
+use crate::rclone::{FileItem, RcloneClient, Remote};
 use crate::Result;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
@@ -18,45 +17,50 @@ use tokio::time::Duration;
 
 /// Application state
 pub struct App {
-    db: TodoDatabase,
-    todos: Vec<Todo>,
+    client: RcloneClient,
+    view: ViewMode,
+    remotes: Vec<Remote>,
+    files: Vec<FileItem>,
     selected: ListState,
-    input: String,
-    input_mode: InputMode,
     status_message: String,
-    filter: Filter,
+    current_remote: Option<String>,
+    current_path: String,
 }
 
 #[derive(Debug, Clone)]
-pub enum InputMode {
-    Normal,
-    Editing,
-}
-
-#[derive(Debug, Clone)]
-pub enum Filter {
-    All,
-    Completed,
-    Pending,
+pub enum ViewMode {
+    Remotes,
+    Files,
 }
 
 impl App {
-    pub fn new(db: TodoDatabase) -> Self {
+    pub fn new(client: RcloneClient) -> Self {
         let mut selected = ListState::default();
         selected.select(Some(0));
 
         Self {
-            db,
-            todos: Vec::new(),
+            client,
+            view: ViewMode::Remotes,
+            remotes: Vec::new(),
+            files: Vec::new(),
             selected,
-            input: String::new(),
-            input_mode: InputMode::Normal,
-            status_message: "Welcome to Todo App! Press 'h' for help.".to_string(),
-            filter: Filter::All,
+            status_message: "Welcome to Rclone UI! Press 'h' for help.".to_string(),
+            current_remote: None,
+            current_path: String::new(),
         }
     }
 
     pub async fn run(&mut self) -> Result<()> {
+        // Check if rclone is available
+        match self.client.check_rclone() {
+            Ok(version) => {
+                self.status_message = format!("Rclone detected: {}", version);
+            }
+            Err(e) => {
+                self.status_message = format!("Error: rclone not found - {}", e);
+            }
+        }
+
         // Setup terminal
         enable_raw_mode()?;
         let mut stdout = io::stdout();
@@ -79,26 +83,15 @@ impl App {
     }
 
     async fn run_app<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> Result<()> {
-        self.refresh_todos().await?;
+        self.refresh_remotes().await?;
 
         loop {
             terminal.draw(|f| self.ui(f))?;
 
             if event::poll(Duration::from_millis(100))? {
                 if let Event::Key(key) = event::read()? {
-                    if key.kind == KeyEventKind::Press {
-                        match self.input_mode {
-                            InputMode::Normal => {
-                                if self.handle_normal_input(key.code).await? {
-                                    break;
-                                }
-                            }
-                            InputMode::Editing => {
-                                if self.handle_editing_input(key.code).await? {
-                                    break;
-                                }
-                            }
-                        }
+                    if key.kind == KeyEventKind::Press && self.handle_input(key.code).await? {
+                        break;
                     }
                 }
             }
@@ -107,65 +100,109 @@ impl App {
         Ok(())
     }
 
-    async fn handle_normal_input(&mut self, key: KeyCode) -> Result<bool> {
+    async fn handle_input(&mut self, key: KeyCode) -> Result<bool> {
         match key {
             KeyCode::Char('q') => return Ok(true),
             KeyCode::Char('h') => {
-                self.status_message = "Commands: q=quit, n=new todo, d=delete, c=toggle complete, a=all, p=pending, f=finished, ↑↓=navigate".to_string();
+                self.status_message =
+                    "Commands: q=quit, Enter=open, b=back, r=refresh, ↑↓=navigate".to_string();
             }
-            KeyCode::Char('n') => {
-                self.input_mode = InputMode::Editing;
-                self.input.clear();
-                self.status_message = "Enter new todo (ESC to cancel, Enter to save):".to_string();
-            }
-            KeyCode::Char('d') => {
-                if let Some(index) = self.selected.selected() {
-                    if index < self.todos.len() {
-                        let todo = &self.todos[index];
-                        self.db.delete_todo(&todo.id).await?;
-                        self.refresh_todos().await?;
-                        self.status_message = "Todo deleted!".to_string();
+            KeyCode::Char('r') => match self.view {
+                ViewMode::Remotes => {
+                    self.refresh_remotes().await?;
+                    self.status_message = "Remotes refreshed".to_string();
+                }
+                ViewMode::Files => {
+                    if let Some(remote) = self.current_remote.clone() {
+                        let path = self.current_path.clone();
+                        self.refresh_files(&remote, &path).await?;
+                        self.status_message = "Files refreshed".to_string();
                     }
                 }
-            }
-            KeyCode::Char('c') => {
-                if let Some(index) = self.selected.selected() {
-                    if index < self.todos.len() {
-                        let mut todo = self.todos[index].clone();
-                        if todo.completed {
-                            todo.uncomplete();
+            },
+            KeyCode::Char('b') => {
+                match self.view {
+                    ViewMode::Remotes => {
+                        // Already at top level
+                        self.status_message = "Already at remotes view".to_string();
+                    }
+                    ViewMode::Files => {
+                        if self.current_path.is_empty() {
+                            // Go back to remotes
+                            self.view = ViewMode::Remotes;
+                            self.current_remote = None;
+                            self.current_path.clear();
+                            self.refresh_remotes().await?;
+                            self.status_message = "Back to remotes".to_string();
                         } else {
-                            todo.complete();
+                            // Go up one directory
+                            let parts: Vec<&str> = self.current_path.rsplitn(2, '/').collect();
+                            if parts.len() > 1 {
+                                self.current_path = parts[1].to_string();
+                            } else {
+                                self.current_path.clear();
+                            }
+                            if let Some(remote) = self.current_remote.clone() {
+                                let path = self.current_path.clone();
+                                self.refresh_files(&remote, &path).await?;
+                            }
+                            self.status_message = "Went up one directory".to_string();
                         }
-                        self.db.update_todo(&todo).await?;
-                        self.refresh_todos().await?;
-                        self.status_message = if todo.completed {
-                            "Todo marked as completed!".to_string()
-                        } else {
-                            "Todo marked as pending!".to_string()
-                        };
                     }
                 }
             }
-            KeyCode::Char('a') => {
-                self.filter = Filter::All;
-                self.refresh_todos().await?;
-                self.status_message = "Showing all todos".to_string();
-            }
-            KeyCode::Char('p') => {
-                self.filter = Filter::Pending;
-                self.refresh_todos().await?;
-                self.status_message = "Showing pending todos".to_string();
-            }
-            KeyCode::Char('f') => {
-                self.filter = Filter::Completed;
-                self.refresh_todos().await?;
-                self.status_message = "Showing completed todos".to_string();
+            KeyCode::Enter => {
+                match self.view {
+                    ViewMode::Remotes => {
+                        if let Some(index) = self.selected.selected() {
+                            if index < self.remotes.len() {
+                                let remote = self.remotes[index].clone();
+                                self.current_remote = Some(remote.name.clone());
+                                self.current_path.clear();
+                                self.view = ViewMode::Files;
+                                self.refresh_files(&remote.name, "").await?;
+                                self.status_message = format!("Opened remote: {}", remote.name);
+                            }
+                        }
+                    }
+                    ViewMode::Files => {
+                        if let Some(index) = self.selected.selected() {
+                            if index < self.files.len() {
+                                let file = self.files[index].clone();
+                                if file.is_dir {
+                                    // Navigate into directory
+                                    self.current_path = if self.current_path.is_empty() {
+                                        file.path.clone()
+                                    } else {
+                                        format!("{}/{}", self.current_path, file.path)
+                                    };
+                                    if let Some(remote) = self.current_remote.clone() {
+                                        let path = self.current_path.clone();
+                                        self.refresh_files(&remote, &path).await?;
+                                    }
+                                    self.status_message =
+                                        format!("Opened directory: {}", file.name);
+                                } else {
+                                    self.status_message = format!(
+                                        "File: {} ({})",
+                                        file.name,
+                                        self.format_size(file.size)
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
             }
             KeyCode::Down => {
+                let len = match self.view {
+                    ViewMode::Remotes => self.remotes.len(),
+                    ViewMode::Files => self.files.len(),
+                };
+
                 let i = match self.selected.selected() {
                     Some(i) => {
-                        if i >= self.todos.len().saturating_sub(1) {
+                        if i >= len.saturating_sub(1) {
                             0
                         } else {
                             i + 1
@@ -176,10 +213,15 @@ impl App {
                 self.selected.select(Some(i));
             }
             KeyCode::Up => {
+                let len = match self.view {
+                    ViewMode::Remotes => self.remotes.len(),
+                    ViewMode::Files => self.files.len(),
+                };
+
                 let i = match self.selected.selected() {
                     Some(i) => {
                         if i == 0 {
-                            self.todos.len().saturating_sub(1)
+                            len.saturating_sub(1)
                         } else {
                             i - 1
                         }
@@ -193,53 +235,66 @@ impl App {
         Ok(false)
     }
 
-    async fn handle_editing_input(&mut self, key: KeyCode) -> Result<bool> {
-        match key {
-            KeyCode::Enter => {
-                if !self.input.is_empty() {
-                    let todo = Todo::new(self.input.trim().to_string(), None);
-                    self.db.create_todo(&todo).await?;
-                    self.input.clear();
-                    self.input_mode = InputMode::Normal;
-                    self.refresh_todos().await?;
-                    self.status_message = "Todo added!".to_string();
-                }
+    async fn refresh_remotes(&mut self) -> Result<()> {
+        self.remotes = match self.client.list_remotes().await {
+            Ok(remotes) => remotes,
+            Err(e) => {
+                self.status_message = format!("Error loading remotes: {}", e);
+                Vec::new()
             }
-            KeyCode::Char(c) => {
-                self.input.push(c);
-            }
-            KeyCode::Backspace => {
-                self.input.pop();
-            }
-            KeyCode::Esc => {
-                self.input.clear();
-                self.input_mode = InputMode::Normal;
-                self.status_message = "Cancelled".to_string();
-            }
-            _ => {}
-        }
-        Ok(false)
-    }
-
-    async fn refresh_todos(&mut self) -> Result<()> {
-        self.todos = match self.filter {
-            Filter::All => self.db.get_all_todos().await?,
-            Filter::Completed => self.db.get_todos_by_status(true).await?,
-            Filter::Pending => self.db.get_todos_by_status(false).await?,
         };
 
         // Adjust selection if needed
-        if self.todos.is_empty() {
+        if self.remotes.is_empty() {
             self.selected.select(None);
         } else if let Some(selected) = self.selected.selected() {
-            if selected >= self.todos.len() {
-                self.selected.select(Some(self.todos.len() - 1));
+            if selected >= self.remotes.len() {
+                self.selected.select(Some(self.remotes.len() - 1));
             }
         } else {
             self.selected.select(Some(0));
         }
 
         Ok(())
+    }
+
+    async fn refresh_files(&mut self, remote: &str, path: &str) -> Result<()> {
+        self.files = match self.client.list_files(remote, path).await {
+            Ok(files) => files,
+            Err(e) => {
+                self.status_message = format!("Error loading files: {}", e);
+                Vec::new()
+            }
+        };
+
+        // Adjust selection if needed
+        if self.files.is_empty() {
+            self.selected.select(None);
+        } else if let Some(selected) = self.selected.selected() {
+            if selected >= self.files.len() {
+                self.selected.select(Some(self.files.len() - 1));
+            }
+        } else {
+            self.selected.select(Some(0));
+        }
+
+        Ok(())
+    }
+
+    fn format_size(&self, size: i64) -> String {
+        const KB: i64 = 1024;
+        const MB: i64 = KB * 1024;
+        const GB: i64 = MB * 1024;
+
+        if size >= GB {
+            format!("{:.2} GB", size as f64 / GB as f64)
+        } else if size >= MB {
+            format!("{:.2} MB", size as f64 / MB as f64)
+        } else if size >= KB {
+            format!("{:.2} KB", size as f64 / KB as f64)
+        } else {
+            format!("{} B", size)
+        }
     }
 
     fn ui(&mut self, f: &mut Frame) {
@@ -254,59 +309,104 @@ impl App {
             .split(f.size());
 
         // Title
-        let title = Paragraph::new("📝 Todo App")
+        let title_text = match self.view {
+            ViewMode::Remotes => "☁️  Rclone UI - Remotes",
+            ViewMode::Files => {
+                if let Some(ref remote) = self.current_remote {
+                    if self.current_path.is_empty() {
+                        return f.render_widget(
+                            Paragraph::new(format!("☁️  Rclone UI - {}", remote))
+                                .style(Style::default().fg(Color::Cyan))
+                                .alignment(Alignment::Center)
+                                .block(Block::default().borders(Borders::ALL)),
+                            chunks[0],
+                        );
+                    } else {
+                        return f.render_widget(
+                            Paragraph::new(format!(
+                                "☁️  Rclone UI - {}:{}",
+                                remote, self.current_path
+                            ))
+                            .style(Style::default().fg(Color::Cyan))
+                            .alignment(Alignment::Center)
+                            .block(Block::default().borders(Borders::ALL)),
+                            chunks[0],
+                        );
+                    }
+                }
+                "☁️  Rclone UI - Files"
+            }
+        };
+
+        let title = Paragraph::new(title_text)
             .style(Style::default().fg(Color::Cyan))
             .alignment(Alignment::Center)
             .block(Block::default().borders(Borders::ALL));
         f.render_widget(title, chunks[0]);
 
-        // Todo list
-        let todos: Vec<ListItem> = self
-            .todos
-            .iter()
-            .map(|todo| {
-                let status = if todo.completed { "✓" } else { "○" };
-                let style = if todo.completed {
-                    Style::default()
-                        .fg(Color::Green)
-                        .add_modifier(Modifier::CROSSED_OUT)
-                } else {
-                    Style::default().fg(Color::White)
-                };
+        // Main content
+        match self.view {
+            ViewMode::Remotes => {
+                let items: Vec<ListItem> = self
+                    .remotes
+                    .iter()
+                    .map(|remote| {
+                        let content = format!("📦 {}", remote.name);
+                        ListItem::new(content).style(Style::default().fg(Color::White))
+                    })
+                    .collect();
 
-                let content = format!("{} {}", status, todo.title);
-                ListItem::new(content).style(style)
-            })
-            .collect();
+                let list = List::new(items)
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title(format!("Remotes ({})", self.remotes.len())),
+                    )
+                    .highlight_style(
+                        Style::default()
+                            .bg(Color::DarkGray)
+                            .add_modifier(Modifier::BOLD),
+                    )
+                    .highlight_symbol(">> ");
 
-        let filter_text = match self.filter {
-            Filter::All => "All",
-            Filter::Completed => "Completed",
-            Filter::Pending => "Pending",
-        };
+                f.render_stateful_widget(list, chunks[1], &mut self.selected);
+            }
+            ViewMode::Files => {
+                let items: Vec<ListItem> = self
+                    .files
+                    .iter()
+                    .map(|file| {
+                        let icon = if file.is_dir { "📁" } else { "📄" };
+                        let size_str = if file.is_dir {
+                            String::new()
+                        } else {
+                            format!(" ({})", self.format_size(file.size))
+                        };
+                        let content = format!("{} {}{}", icon, file.name, size_str);
+                        ListItem::new(content).style(Style::default().fg(Color::White))
+                    })
+                    .collect();
 
-        let todos_list = List::new(todos)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(format!("Todos ({})", filter_text)),
-            )
-            .highlight_style(Style::default().bg(Color::DarkGray))
-            .highlight_symbol(">> ");
+                let list = List::new(items)
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title(format!("Files ({})", self.files.len())),
+                    )
+                    .highlight_style(
+                        Style::default()
+                            .bg(Color::DarkGray)
+                            .add_modifier(Modifier::BOLD),
+                    )
+                    .highlight_symbol(">> ");
 
-        f.render_stateful_widget(todos_list, chunks[1], &mut self.selected);
+                f.render_stateful_widget(list, chunks[1], &mut self.selected);
+            }
+        }
 
-        // Status/Input bar
-        let status_text = match self.input_mode {
-            InputMode::Normal => self.status_message.clone(),
-            InputMode::Editing => format!("New todo: {}", self.input),
-        };
-
-        let status = Paragraph::new(status_text)
-            .style(match self.input_mode {
-                InputMode::Normal => Style::default(),
-                InputMode::Editing => Style::default().fg(Color::Yellow),
-            })
+        // Status bar
+        let status = Paragraph::new(self.status_message.clone())
+            .style(Style::default())
             .wrap(Wrap { trim: true })
             .block(Block::default().borders(Borders::ALL).title("Status"));
 

@@ -14,6 +14,9 @@ pkgs.mkShell {
     openssl
     sqlite
 
+    # Rclone
+    rclone
+
     # Additional development tools
     git
   ] ++ lib.optionals stdenv.isDarwin [
@@ -23,8 +26,9 @@ pkgs.mkShell {
   ];
 
   shellHook = ''
-    echo "🦀 Rust development environment (shell.nix)"
+    echo "🦀 Rclone UI development environment (shell.nix)"
     echo "Rust version: $(rustc --version)"
+    echo "Rclone version: $(rclone version | head -1)"
     echo ""
     echo "To use flakes instead, run: nix develop"
     echo ""

@@ -1,5 +1,5 @@
 {
-  description = "Template Rust - A Rust template with todo app example";
+  description = "Rclone UI - A TUI for rclone cloud file management";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -27,6 +27,7 @@
         buildInputs = with pkgs; [
           openssl
           sqlite
+          rclone
         ] ++ lib.optionals stdenv.isDarwin [
           darwin.apple_sdk.frameworks.Security
           darwin.apple_sdk.frameworks.SystemConfiguration
@@ -39,8 +40,9 @@
           inherit buildInputs nativeBuildInputs;
 
           shellHook = ''
-            echo "🦀 Rust development environment"
+            echo "🦀 Rclone UI development environment"
             echo "Rust version: $(rustc --version)"
+            echo "Rclone version: $(rclone version | head -1)"
             echo ""
             echo "Available commands:"
             echo "  cargo build       - Build the project"
@@ -58,7 +60,7 @@
 
         # Package definition
         packages.default = pkgs.rustPlatform.buildRustPackage {
-          pname = "template-rust";
+          pname = "rclone-ui";
           version = "0.1.0";
 
           src = ./.;
@@ -70,8 +72,8 @@
           inherit nativeBuildInputs buildInputs;
 
           meta = with pkgs.lib; {
-            description = "A Rust template with todo app example using SQLite and TUI";
-            homepage = "https://github.com/pnstack/template-rust";
+            description = "A TUI for rclone cloud file management";
+            homepage = "https://github.com/np2023v2/rclone-ui";
             license = with licenses; [ mit asl20 ];
             maintainers = [ ];
           };
@@ -80,7 +82,7 @@
         # App definition for easy running
         apps.default = {
           type = "app";
-          program = "${self.packages.${system}.default}/bin/template-rust";
+          program = "${self.packages.${system}.default}/bin/rclone-ui";
         };
       }
     );

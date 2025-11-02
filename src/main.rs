@@ -18,11 +18,8 @@ enum Commands {
     Remotes,
     /// List files in a remote
     List {
-        /// Remote name (e.g., "myremote:")
-        remote: String,
-        /// Optional path within the remote
-        #[arg(default_value = "")]
-        path: String,
+        /// Remote and path (e.g., "myremote:" or "myremote:/path/to/folder")
+        remote_path: String,
     },
     /// Check rclone version
     Version,
@@ -52,8 +49,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        Some(Commands::List { remote, path }) => {
-            let files = client.list_files(&remote, &path).await?;
+        Some(Commands::List { remote_path }) => {
+            // Split remote and path
+            let parts: Vec<&str> = remote_path.splitn(2, ':').collect();
+            if parts.len() < 2 {
+                eprintln!("Error: Invalid format. Use 'remote:' or 'remote:/path'");
+                return Ok(());
+            }
+            let remote = parts[0];
+            let path = if parts[1].is_empty() { "" } else { parts[1] };
+
+            let files = client.list_files(remote, path).await?;
             if files.is_empty() {
                 println!("No files found.");
             } else {

@@ -1,4 +1,4 @@
-use rclone_ui::rclone::{FileItem, Remote, RcloneClient};
+use rclone_ui::rclone::{FileItem, RcloneClient, Remote};
 
 #[test]
 fn test_remote_creation() {
@@ -45,7 +45,7 @@ fn test_directory_item_creation() {
 #[test]
 fn test_rclone_client_creation() {
     let client = RcloneClient::new();
-    
+
     // Just verify we can create a client
     // Actual rclone operations require rclone to be installed
     let debug_str = format!("{:?}", client);
@@ -55,7 +55,7 @@ fn test_rclone_client_creation() {
 #[tokio::test]
 async fn test_rclone_version_check() {
     let client = RcloneClient::new();
-    
+
     // This test will pass if rclone is installed, skip if not
     match client.check_rclone() {
         Ok(version) => {
